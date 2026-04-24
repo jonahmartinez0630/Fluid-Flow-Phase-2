@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wort Transfer Piping — Computational Model (Imperial, Temp-Dependent)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f5f0; color: #1a1a1a; padding: 1.5rem; }
+  h1 { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
+  .sub { font-size: 13px; color: #666; margin-bottom: 1.25rem; }
+  .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .card { background: #fff; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 12px; padding: 1rem 1.25rem; }
+  .met { background: #f5f5f0; border-radius: 8px; padding: .75rem 1rem; }
+  .ml { font-size: 12px; color: #666; margin: 0 0 3px; }
+  .mv { font-size: 20px; font-weight: 500; color: #1a1a1a; margin: 0; }
+  .ms { font-size: 11px; color: #666; margin: 2px 0 0; }
+  .st { font-size: 11px; font-weight: 500; color: #666; text-transform: uppercase; letter-spacing: .05em; margin: 0 0 10px; }
+  .sr { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .sr label { font-size: 12px; color: #555; min-width: 165px; }
+  .sr input[type=range] { flex: 1; min-width: 0; }
+  .sv { font-size: 12px; font-weight: 500; min-width: 80px; text-align: right; color: #1a1a1a; }
+  select { flex: 1; font-size: 12px; padding: 4px; border: 0.5px solid rgba(0,0,0,0.2); border-radius: 6px; background: #fff; }
+  .bdg { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 6px; font-weight: 500; }
+  .bok { background: #EAF3DE; color: #3B6D11; }
+  .bwn { background: #FAEEDA; color: #854F0B; }
+  .bng { background: #FCEBEB; color: #A32D2D; }
+  .ibox {
+    font-family: monospace; font-size: 10px; background: #f5f5f0;
+    border-radius: 8px; padding: .6rem; max-height: 130px;
+    overflow-y: auto; color: #555; white-space: pre; line-height: 1.5;
+  }
+  #recs { font-size: 12px; color: #555; line-height: 1.9; }
+  .chart-wrap { position: relative; width: 100%; }
+</style>
+</head>
+<body>
+
+<h1>Wort transfer piping — computational model (imperial)</h1>
+<p class="sub">Colebrook solver · Reynolds number · system &amp; pump curves · temperature-dependent fluid properties</p>
+
+<!-- ── Controls ── -->
+<div class="g2">
+  <div class="card">
+    <div class="st">Pipe parameters</div>
+    <!--
+      Diameter slider: 0.5 in – 4.0 in (step 0.25 in)
+      Default 2.0 in ≈ 50 mm (standard 2" sanitary pipe)
+    -->
+    <div class="sr">
+      <label>Diameter (in)</label>
+      <input type="range" min="0.5" max="4.0" step="0.25" value="2.0" id="s_diam">
+      <span class="sv" id="o_diam">2.00 in</span>
+    </div>
+    <!--
+      Roughness slider: 0.00004 – 0.08 in (step 0.00004)
+      Default 0.0018 in ≈ 0.046 mm (commercial steel / sanitary SS)
+    -->
+    <div class="sr">
+      <label>Roughness ε (in)</label>
+      <input type="range" min="0.00004" max="0.08" step="0.00004" value="0.0018" id="s_rough">
+      <span class="sv" id="o_rough">0.00180 in</span>
+    </div>
+    <div class="sr">
+      <label>90° elbows</label>
+      <input type="range" min="0" max="10" step="1" value="3" id="s_elb">
+      <span class="sv" id="o_elb">3</span>
+    </div>
+    <div class="sr">
+      <label>Gate valves</label>
+      <input type="range" min="0" max="5" step="1" value="2" id="s_val">
+      <span class="sv" id="o_val">2</span>
+    </div>
+    <!--
+      Pipe length: 15 – 165 ft (step 1 ft)
+      Default 33 ft ≈ 10 m
+    -->
+    <div class="sr">
+      <label>Pipe length (ft)</label>
+      <input type="range" min="15" max="165" step="1" value="33" id="s_len">
+      <span class="sv" id="o_len">33 ft</span>
+    </div>
+    <!--
+      Static rise: 1 – 33 ft
+      Default 9.84 ft ≈ 3 m
+    -->
+    <div class="sr">
+      <label>Static rise (ft)</label>
+      <input type="range" min="1" max="33" step="0.5" value="9.84" id="s_rise">
+      <span class="sv" id="o_rise">9.84 ft</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="st">Fluid &amp; flow</div>
+    <div class="sr">
+      <label>Fluid preset</label>
+      <select id="s_fluid">
+        <!--
+          Density in lb/ft³, viscosity in cP (centipoise).
+          Internally converted: 1 lb/ft³ = 16.0185 kg/m³, 1 cP = 0.001 Pa·s
+          Physics is still solved in SI, results displayed in imperial.
+          When temperature is adjusted, density & viscosity are auto-corrected
+          via empirical correlations. Custom mode disables auto-correction.
+        -->
+        <option value="water">Water</option>
+        <option value="light">Wort light (~1.040 SG)</option>
+        <option value="heavy">Wort heavy (~1.080 SG)</option>
+        <option value="custom">Custom (manual ρ &amp; μ)</option>
+      </select>
+    </div>
+    <!--
+      Temperature: 32°F – 212°F (0°C – 100°C)
+      Default 68°F = 20°C (ambient transfer temp)
+      Typical wort transfer: 60–75°F post-chilling; up to 212°F hot-side
+      When fluid != custom, changing T auto-updates ρ and μ via correlations.
+    -->
+    <div class="sr">
+      <label>Temperature T (°F)</label>
+      <input type="range" min="32" max="212" step="1" value="68" id="s_temp">
+      <span class="sv" id="o_temp">68 °F</span>
+    </div>
+    <!-- Density: lb/ft³ — read-only when preset selected, editable for custom -->
+    <div class="sr">
+      <label>Density ρ (lb/ft³)</label>
+      <input type="range" min="55.0" max="71.8" step="0.1" value="62.4" id="s_rho">
+      <span class="sv" id="o_rho">62.4</span>
+    </div>
+    <!-- Viscosity: cP (centipoise) = mPa·s — read-only when preset, editable for custom -->
+    <div class="sr">
+      <label>Viscosity μ (cP)</label>
+      <input type="range" min="0.2" max="10" step="0.05" value="1.0" id="s_mu">
+      <span class="sv" id="o_mu">1.00 cP</span>
+    </div>
+    <!--
+      Flow rate: US gallons per minute (GPM)
+      Default 26.4 GPM ≈ 100 L/min
+      Range: 5 – 79 GPM ≈ 20 – 300 L/min
+    -->
+    <div class="sr">
+      <label>Flow rate Q (GPM)</label>
+      <input type="range" min="5" max="79" step="0.5" value="26.4" id="s_flow">
+      <span class="sv" id="o_flow">26.4 GPM</span>
+    </div>
+    <div class="sr">
+      <label>Pump efficiency η</label>
+      <input type="range" min="30" max="90" step="1" value="65" id="s_eta">
+      <span class="sv" id="o_eta">65%</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Metric cards ── -->
+<div class="g3">
+  <div class="met"><p class="ml">Reynolds number</p><p class="mv" id="m_re">—</p><p class="ms" id="m_reg">—</p></div>
+  <div class="met"><p class="ml">Friction factor f</p><p class="mv" id="m_f">—</p><p class="ms" id="m_fi">— iterations</p></div>
+  <div class="met"><p class="ml">Velocity</p><p class="mv" id="m_v">—</p><p class="ms" id="m_vf">—</p></div>
+  <div class="met"><p class="ml">Total head loss</p><p class="mv" id="m_hl">—</p><p class="ms">major + minor losses</p></div>
+  <div class="met"><p class="ml">Required pump head</p><p class="mv" id="m_hp">—</p><p class="ms">static + losses</p></div>
+  <div class="met"><p class="ml">Pump power input</p><p class="mv" id="m_pw">—</p><p class="ms" id="m_pws">—</p></div>
+</div>
+<!-- Temperature-corrected fluid properties row -->
+<div class="g3" style="margin-bottom:12px">
+  <div class="met"><p class="ml">Fluid temperature</p><p class="mv" id="m_temp">—</p><p class="ms" id="m_tempC">—</p></div>
+  <div class="met"><p class="ml">Density ρ @ T</p><p class="mv" id="m_rho_t">—</p><p class="ms">temperature-corrected</p></div>
+  <div class="met"><p class="ml">Viscosity μ @ T</p><p class="mv" id="m_mu_t">—</p><p class="ms">temperature-corrected</p></div>
+</div>
+
+<!-- ── Iteration log + Recommendations ── -->
+<div class="g2">
+  <div class="card">
+    <div class="st">Colebrook iteration log</div>
+    <div class="ibox" id="iterlog">—</div>
+  </div>
+  <div class="card">
+    <div class="st">Diagnostics &amp; recommendations</div>
+    <div id="recs">—</div>
+  </div>
+</div>
+
+<!-- ── System vs Pump curve ── -->
+<div class="card" style="margin-bottom:12px">
+  <div class="st">System curve vs pump curve — operating point</div>
+  <div class="chart-wrap" style="height:260px"><canvas id="cc"></canvas></div>
+</div>
+
+<!-- ── Moody + Loss breakdown ── -->
+<div class="g2">
+  <div class="card">
+    <div class="st">Moody diagram slice — f vs Re</div>
+    <div class="chart-wrap" style="height:210px"><canvas id="mc"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="st">Head loss breakdown</div>
+    <div class="chart-wrap" style="height:210px"><canvas id="lc"></canvas></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+//  UNIT CONVERSION CONSTANTS
+//  All physics is solved in SI (m, kg, s, Pa).
+//  Inputs are read in imperial units and converted to SI before calculation.
+//  Outputs are converted back to imperial for display.
+// ══════════════════════════════════════════════════════════════════════════════
+var IN_TO_M      = 0.0254;        // 1 inch = 0.0254 m
+var FT_TO_M      = 0.3048;        // 1 foot = 0.3048 m
+var M_TO_FT      = 1 / 0.3048;   // 1 m = 3.28084 ft
+var GPM_TO_M3S   = 6.30902e-5;   // 1 US GPM = 6.30902×10⁻⁵ m³/s
+var LBF3_TO_KGM3 = 16.0185;      // 1 lb/ft³ = 16.0185 kg/m³
+var KGM3_TO_LBF3 = 1 / 16.0185;  // 1 kg/m³ = 0.06243 lb/ft³
+var MPS_TO_FPS   = 1 / 0.3048;   // 1 m/s = 3.28084 ft/s
+var W_TO_HP      = 1 / 745.7;    // 1 W = 0.001341 hp
+
+// SI gravitational acceleration
+var G = 9.81; // m/s²
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  TEMPERATURE-DEPENDENT FLUID PROPERTY CORRELATIONS
+//
+//  Water density (kg/m³) vs T (°C):
+//    IAPWS-95 simplified polynomial, accurate to ±0.05 kg/m³ over 0–100°C
+//    ρ_water = 999.842 + 0.0603T - 0.003720T² + 1.058e-5·T³ - 2.80e-8·T⁴ + 4.16e-11·T⁵
+//    (Kell 1975, widely used in fluid mechanics textbooks)
+//
+//  Water dynamic viscosity (Pa·s) vs T (°C):
+//    Vogel equation fit (valid 0–100°C, error < 0.5%):
+//    μ_water = A · exp(B / (T + C))
+//    A=2.414e-5, B=247.8, C=140.0  (T in °C+273.15 i.e. K actually, re-expressed below)
+//    Simplified as: μ = 2.414e-5 · 10^(247.8 / (T_K - 140))  where T_K = T_C + 273.15
+//
+//  Wort density offset:
+//    Wort has dissolved sugars (extract). Specific gravity (SG) linearly scales density.
+//    ρ_wort(T) = SG_ref · ρ_water(T)
+//    SG_ref at 60°F (15.6°C): light=1.040, heavy=1.080
+//    (Standard brewing convention; density correction applied at each T)
+//
+//  Wort viscosity:
+//    Wort viscosity follows an Arrhenius-type correction relative to water:
+//    μ_wort(T) = μ_water(T) · (μ_wort_ref / μ_water_ref)
+//    where ref values are at 68°F (20°C).
+//    Reference ratio: light=1.5, heavy=3.0  (measured values from brewing literature)
+//
+//  All correlations return SI units; conversion to imperial done at display time.
+// ══════════════════════════════════════════════════════════════════════════════
+
+function waterDensity_SI(T_C) {
+  // Returns kg/m³; T_C in °C (0–100)
+  var t = T_C;
+  return 999.842594
+       + 6.793952e-2  * t
+       - 9.095290e-3  * t*t
+       + 1.001685e-4  * t*t*t
+       - 1.120083e-6  * t*t*t*t
+       + 6.536332e-9  * t*t*t*t*t;
+}
+
+function waterViscosity_SI(T_C) {
+  // Returns Pa·s; Vogel equation, T_C in °C
+  // μ = 2.414e-5 × 10^(247.8 / (T_K - 140))
+  var T_K = T_C + 273.15;
+  return 2.414e-5 * Math.pow(10, 247.8 / (T_K - 140.0));
+}
+
+// Reference temperature: 20°C (68°F)
+var T_REF_C = 20.0;
+var MU_WATER_REF = waterViscosity_SI(T_REF_C);  // Pa·s at 20°C ≈ 0.001002
+
+// Specific gravity and viscosity ratio for each preset (at reference temp)
+var presetProps = {
+  water: { SG: 1.000, mu_ratio: 1.000 },
+  light: { SG: 1.040, mu_ratio: 1.500 },   // μ_wort / μ_water at 20°C
+  heavy: { SG: 1.080, mu_ratio: 3.000 }
+};
+
+// Compute temperature-corrected ρ (kg/m³) and μ (Pa·s) for a given preset and T_C
+function fluidProps(fluidKey, T_C) {
+  var rho_w = waterDensity_SI(T_C);
+  var mu_w  = waterViscosity_SI(T_C);
+  if (fluidKey === 'water') {
+    return { rho: rho_w, mu: mu_w };
+  }
+  var p   = presetProps[fluidKey];
+  var rho = p.SG * rho_w;
+  // Viscosity scales with water's T-dependence, preserving wort/water ratio at ref T
+  var mu  = mu_w * (p.mu_ratio * MU_WATER_REF) / MU_WATER_REF * (mu_w / MU_WATER_REF);
+  // Simplified: μ_wort(T) = μ_water(T) × mu_ratio_ref × (μ_water(T)/μ_water_ref)
+  // This matches the Arrhenius-type behaviour: more viscous fluids thin faster with T
+  mu = p.mu_ratio * mu_w;
+  return { rho: rho, mu: mu };
+}
+
+// Pump model constants (internal SI)
+// Shut-off head: 92 ft ≈ 28 m; Max flow: 84 GPM ≈ 320 L/min
+var PUMP_SHUTOFF_FT = 92.0;   // ft
+var PUMP_QMAX_GPM   = 84.0;   // GPM
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  COLEBROOK–WHITE ITERATIVE SOLVER
+//
+//  Equation:  1/√f = -2 log10( ε/(3.7·D) + 2.51/(Re·√f) )
+//
+//  Inputs:  Re           — Reynolds number (dimensionless)
+//           relRoughness — relative roughness ε/D (dimensionless)
+//  Returns: { f, iters }
+//
+//  For Re < 2300 (laminar): uses analytical Hagen–Poiseuille f = 64/Re
+// ══════════════════════════════════════════════════════════════════════════════
+function solveColebrook(Re, relRoughness) {
+  if (Re < 1) return { f: 0.02, iters: [] };
+
+  // Laminar — analytical
+  if (Re < 2300) {
+    var f_lam = 64 / Re;
+    return { f: f_lam, iters: [{ i: 'lam', f: f_lam.toFixed(6), err: 'analytical (64/Re)' }] };
+  }
+
+  // Turbulent — iterate to convergence
+  var f     = 0.02;   // initial guess (Blasius approximation)
+  var tol   = 1e-9;   // convergence tolerance on Δf
+  var iters = [];
+
+  for (var i = 1; i <= 60; i++) {
+    var sqf   = Math.sqrt(f);
+    var rhs   = -2 * Math.log10(relRoughness / 3.7 + 2.51 / (Re * sqf));
+    var f_new = 1 / (rhs * rhs);
+    var err   = Math.abs(f_new - f);
+    iters.push({ i: i, f: f_new.toFixed(8), err: err.toExponential(2) });
+    f = f_new;
+    if (err < tol) break;
+  }
+
+  return { f: f, iters: iters };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SYSTEM HYDRAULICS  (all SI internally)
+//
+//  Darcy–Weisbach:  hf_major = f · (L/D) · V²/(2g)          [m]
+//  Minor losses:    hf_minor = K_total · V²/(2g)             [m]
+//    K per 90° elbow  = 0.9  (standard radius)
+//    K per gate valve = 0.2  (fully open)
+//    K entry + exit   = 1.0  (sharp-edged)
+//
+//  Inputs all in SI:
+//    D_m   — diameter [m]
+//    eps_m — roughness [m]
+//    rho   — density [kg/m³]
+//    mu    — dynamic viscosity [Pa·s]
+//    L     — pipe length [m]
+//    Q_m3s — volumetric flow rate [m³/s]
+// ══════════════════════════════════════════════════════════════════════════════
+function calcSystem(D_m, eps_m, rho, mu, L, Q_m3s, elbows, valves) {
+  var A      = Math.PI * D_m * D_m / 4;   // cross-sectional area [m²]
+  var V      = Q_m3s / A;                 // mean velocity [m/s]
+  var Re     = rho * V * D_m / mu;        // Reynolds number (dimensionless)
+  var relR   = eps_m / D_m;               // relative roughness ε/D (dimensionless)
+
+  var cb     = solveColebrook(Re, relR);
+  var f      = cb.f;
+
+  var hf_maj = f * (L / D_m) * (V * V) / (2 * G);    // major loss [m]
+  var K_tot  = elbows * 0.9 + valves * 0.2 + 1.0;    // sum of K factors
+  var hf_min = K_tot * (V * V) / (2 * G);             // minor loss [m]
+
+  return {
+    Re:     Re,
+    f:      f,
+    iters:  cb.iters,
+    V:      V,          // m/s
+    hf_maj: hf_maj,     // m
+    hf_min: hf_min,     // m
+    hf:     hf_maj + hf_min  // m
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  PUMP CURVE  (quadratic model)
+//  H_pump = H_shutoff × (1 − (Q/Q_max)²)
+//  Works in imperial (ft, GPM) for display; converted where needed.
+// ══════════════════════════════════════════════════════════════════════════════
+function pumpH_ft(Q_gpm) {
+  var q = Q_gpm / PUMP_QMAX_GPM;
+  return Math.max(0, PUMP_SHUTOFF_FT * (1 - q * q));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SYSTEM CURVE  at a given flow (returns head in feet)
+// ══════════════════════════════════════════════════════════════════════════════
+function sysH_ft(Q_gpm, D_m, eps_m, rho, mu, L_m, Z_m, elbows, valves) {
+  if (Q_gpm <= 0) return Z_m * M_TO_FT;
+  var Q_m3s = Q_gpm * GPM_TO_M3S;
+  var r = calcSystem(D_m, eps_m, rho, mu, L_m, Q_m3s, elbows, valves);
+  return (Z_m + r.hf) * M_TO_FT;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  CHART INITIALISATION
+// ══════════════════════════════════════════════════════════════════════════════
+var cChart, mChart, lChart;
+
+function buildCharts() {
+  // System vs pump curve
+  cChart = new Chart(document.getElementById('cc'), {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'System curve',
+          data: [],
+          borderColor: '#185FA5',
+          backgroundColor: 'rgba(24,95,165,0.08)',
+          tension: 0.35, pointRadius: 0, borderWidth: 2, fill: true
+        },
+        {
+          label: 'Pump curve',
+          data: [],
+          borderColor: '#3B6D11',
+          backgroundColor: 'rgba(59,109,17,0.06)',
+          tension: 0.35, pointRadius: 0, borderWidth: 2, fill: true
+        },
+        {
+          label: 'Operating point',
+          data: [],
+          type: 'scatter',
+          borderColor: '#D85A30', backgroundColor: '#D85A30',
+          pointRadius: 8, pointStyle: 'circle'
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'top', labels: { font: { size: 11 }, boxWidth: 12, padding: 12 } } },
+      scales: {
+        x: { type: 'linear', title: { display: true, text: 'Flow rate (GPM)', font: { size: 11 } }, min: 0, max: 80, grid: { color: 'rgba(0,0,0,0.07)' }, ticks: { font: { size: 10 } } },
+        y: { title: { display: true, text: 'Head (ft)', font: { size: 11 } }, min: 0, grid: { color: 'rgba(0,0,0,0.07)' }, ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+
+  // Moody diagram slice
+  mChart = new Chart(document.getElementById('mc'), {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'f', data: [], borderColor: '#7F77DD', pointRadius: 0, tension: 0, borderWidth: 2 },
+        { label: 'Operating Re', data: [], type: 'scatter', borderColor: '#D85A30', backgroundColor: '#D85A30', pointRadius: 7 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          type: 'logarithmic',
+          title: { display: true, text: 'Reynolds number (Re)', font: { size: 11 } },
+          min: 100, max: 2000000,
+          grid: { color: 'rgba(0,0,0,0.07)' },
+          ticks: { font: { size: 10 }, callback: function(v) { var e = Math.round(Math.log10(v)); return Math.pow(10,e)===v ? '10^'+e : null; } }
+        },
+        y: { title: { display: true, text: 'Friction factor f', font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.07)' }, ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+
+  // Head loss breakdown (ft)
+  lChart = new Chart(document.getElementById('lc'), {
+    type: 'bar',
+    data: {
+      labels: ['Major loss (friction)', 'Minor loss (fittings)', 'Static rise'],
+      datasets: [{ data: [0, 0, 0], backgroundColor: ['#378ADD', '#1D9E75', '#D85A30'], borderRadius: 4, borderSkipped: false }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+        y: { title: { display: true, text: 'Head (ft)', font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.07)' }, ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  MAIN UPDATE  — runs on every slider / dropdown change
+// ══════════════════════════════════════════════════════════════════════════════
+function update() {
+  // ── Read imperial inputs ──────────────────────────────────────────────────
+  var D_in    = parseFloat(document.getElementById('s_diam').value);   // inches
+  var eps_in  = parseFloat(document.getElementById('s_rough').value);  // inches
+  var elbows  = parseInt(document.getElementById('s_elb').value);
+  var valves  = parseInt(document.getElementById('s_val').value);
+  var L_ft    = parseFloat(document.getElementById('s_len').value);    // feet
+  var Z_ft    = parseFloat(document.getElementById('s_rise').value);   // feet
+  var Q_gpm   = parseFloat(document.getElementById('s_flow').value);   // GPM
+  var eta     = parseFloat(document.getElementById('s_eta').value) / 100;
+  var T_F     = parseFloat(document.getElementById('s_temp').value);   // °F
+  var fluid   = document.getElementById('s_fluid').value;
+
+  // Convert temperature to Celsius for correlations
+  var T_C = (T_F - 32) * 5 / 9;
+
+  var rho, mu, rho_imp, mu_cP;
+
+  if (fluid === 'custom') {
+    // Custom: use slider values directly, temperature does NOT auto-correct
+    rho_imp = parseFloat(document.getElementById('s_rho').value);  // lb/ft³
+    mu_cP   = parseFloat(document.getElementById('s_mu').value);   // cP
+    rho     = rho_imp * LBF3_TO_KGM3;   // kg/m³
+    mu      = mu_cP * 0.001;            // Pa·s
+  } else {
+    // Preset: compute temperature-corrected ρ and μ via empirical correlations
+    var props = fluidProps(fluid, T_C);
+    rho     = props.rho;   // kg/m³
+    mu      = props.mu;    // Pa·s
+    rho_imp = rho * KGM3_TO_LBF3;
+    mu_cP   = mu * 1000;
+
+    // Sync sliders and labels to show the computed values
+    document.getElementById('s_rho').value        = rho_imp.toFixed(1);
+    document.getElementById('o_rho').textContent  = rho_imp.toFixed(2);
+    document.getElementById('s_mu').value         = mu_cP.toFixed(2);
+    document.getElementById('o_mu').textContent   = mu_cP.toFixed(3) + ' cP';
+  }
+
+  // ── Convert pipe/flow inputs to SI ───────────────────────────────────────
+  var D_m   = D_in  * IN_TO_M;
+  var eps_m = eps_in * IN_TO_M;
+  var L_m   = L_ft  * FT_TO_M;
+  var Z_m   = Z_ft  * FT_TO_M;
+  var Q_m3s = Q_gpm * GPM_TO_M3S;
+
+  // ── Core hydraulic calculation (SI) ──────────────────────────────────────
+  var res      = calcSystem(D_m, eps_m, rho, mu, L_m, Q_m3s, elbows, valves);
+  var H_sys_m  = Z_m + res.hf;
+  var Pw_hyd_W = rho * G * Q_m3s * H_sys_m;
+  var Pw_inp_W = Pw_hyd_W / eta;
+
+  // ── Convert outputs to imperial ───────────────────────────────────────────
+  var V_fps     = res.V   * MPS_TO_FPS;
+  var hf_maj_ft = res.hf_maj * M_TO_FT;
+  var hf_min_ft = res.hf_min * M_TO_FT;
+  var hf_ft     = res.hf    * M_TO_FT;
+  var H_sys_ft  = H_sys_m   * M_TO_FT;
+  var Pw_hyd_hp = Pw_hyd_W  * W_TO_HP;
+  var Pw_inp_hp = Pw_inp_W  * W_TO_HP;
+
+  // ── Update metric cards ───────────────────────────────────────────────────
+  document.getElementById('m_re').textContent  = Math.round(res.Re).toLocaleString();
+  document.getElementById('m_f').textContent   = res.f.toFixed(5);
+  document.getElementById('m_fi').textContent  = res.iters.length + ' iterations';
+  document.getElementById('m_v').textContent   = V_fps.toFixed(2) + ' ft/s';
+  document.getElementById('m_hl').textContent  = hf_ft.toFixed(2) + ' ft';
+  document.getElementById('m_hp').textContent  = H_sys_ft.toFixed(2) + ' ft';
+  document.getElementById('m_pw').textContent  = Pw_inp_hp.toFixed(3) + ' hp';
+  document.getElementById('m_pws').textContent = 'hydraulic: ' + Pw_hyd_hp.toFixed(3) + ' hp';
+
+  // Temperature row
+  document.getElementById('m_temp').textContent  = T_F.toFixed(0) + ' °F';
+  document.getElementById('m_tempC').textContent = T_C.toFixed(1) + ' °C';
+  document.getElementById('m_rho_t').textContent = rho_imp.toFixed(2) + ' lb/ft³';
+  document.getElementById('m_mu_t').textContent  = mu_cP.toFixed(3) + ' cP';
+
+  // Flow regime badge
+  var Re = res.Re;
+  var regTxt, regCls;
+  if      (Re < 2300) { regTxt = 'Laminar';      regCls = 'bok'; }
+  else if (Re < 4000) { regTxt = 'Transitional'; regCls = 'bwn'; }
+  else                { regTxt = 'Turbulent';    regCls = 'bng'; }
+  document.getElementById('m_reg').innerHTML = '<span class="bdg ' + regCls + '">' + regTxt + '</span>';
+
+  // Velocity flag
+  var vf = V_fps > 9.84
+    ? '<span class="bdg bng">High — shear risk &gt;9.8 ft/s</span>'
+    : V_fps < 1.64
+      ? '<span class="bdg bwn">Low — settling risk &lt;1.6 ft/s</span>'
+      : '<span class="bdg bok">Velocity OK</span>';
+  document.getElementById('m_vf').innerHTML = vf;
+
+  // ── Colebrook iteration log ───────────────────────────────────────────────
+  var log = 'iter    f               err\n' + '─'.repeat(36) + '\n';
+  res.iters.forEach(function(it) {
+    log += String(it.i).padStart(4) + '    ' + it.f + '    ' + it.err + '\n';
+  });
+  document.getElementById('iterlog').textContent = log;
+
+  // ── Diagnostics & recommendations ────────────────────────────────────────
+  var recs = [];
+  if (D_in < 1.5)
+    recs.push('<span class="bdg bng">Clogging risk</span> Bore &lt;1.5 in — hop particles may block pipe');
+  if (V_fps > 9.84)
+    recs.push('<span class="bdg bng">Shear risk</span> Velocity &gt;9.8 ft/s — increase pipe diameter');
+  if (V_fps < 1.64)
+    recs.push('<span class="bdg bwn">Settling risk</span> Velocity &lt;1.6 ft/s — solids may settle in pipe');
+  if (T_F > 140)
+    recs.push('<span class="bdg bwn">High temp</span> &gt;140°F — verify pump seal and gasket ratings; use EPDM seals');
+  if (T_F > 200)
+    recs.push('<span class="bdg bng">Near boiling</span> &gt;200°F — flash vaporisation risk; ensure system is fully primed');
+  if (T_F < 40)
+    recs.push('<span class="bdg bwn">Cold transfer</span> &lt;40°F — viscosity is elevated; verify pump priming and motor torque');
+  if (res.hf_min > res.hf_maj)
+    recs.push('<span class="bdg bwn">Fittings dominant</span> Minor losses exceed major — reduce elbows/valves or use long-radius bends');
+  if (Re > 4000 && mu_cP > 2.0)
+    recs.push('<span class="bdg bwn">Pump type</span> Viscous &amp; turbulent — consider lobe or peristaltic pump');
+  if (H_sys_ft > pumpH_ft(Q_gpm))
+    recs.push('<span class="bdg bng">Undersized pump</span> Pump cannot deliver required head at this flow rate');
+  if (recs.length === 0)
+    recs.push('<span class="bdg bok">All parameters OK</span> System within recommended ranges');
+  recs.push('<br><strong>Material:</strong> 316L stainless steel · Tri-Clamp sanitary fittings · Ra ≤ 32 µin electropolished bore');
+  document.getElementById('recs').innerHTML = recs.join('<br>');
+
+  // ── System vs pump curve (GPM vs ft) ─────────────────────────────────────
+  var Qpts = [], sys = [], pmp = [];
+  for (var q = 0; q <= 80; q += 1) {
+    Qpts.push(q);
+    sys.push({ x: q, y: parseFloat(sysH_ft(q, D_m, eps_m, rho, mu, L_m, Z_m, elbows, valves).toFixed(3)) });
+    pmp.push({ x: q, y: parseFloat(pumpH_ft(q).toFixed(3)) });
+  }
+  var opX = 0, opY = 0, minD = Infinity;
+  for (var i = 0; i < sys.length; i++) {
+    var d = Math.abs(sys[i].y - pmp[i].y);
+    if (d < minD) { minD = d; opX = Qpts[i]; opY = sys[i].y; }
+  }
+  cChart.data.datasets[0].data = sys;
+  cChart.data.datasets[1].data = pmp;
+  cChart.data.datasets[2].data = [{ x: opX, y: parseFloat(opY.toFixed(3)) }];
+  cChart.update('none');
+
+  // ── Moody diagram slice ───────────────────────────────────────────────────
+  var reRange  = [100,200,500,1000,2000,4000,8000,20000,60000,200000,600000,2000000];
+  var relR     = eps_m / D_m;
+  var moodyPts = reRange.map(function(r) {
+    var ff;
+    if (r < 2300) {
+      ff = 64 / r;
+    } else {
+      ff = 0.02;
+      for (var k = 0; k < 50; k++) {
+        var rhs = -2 * Math.log10(relR / 3.7 + 2.51 / (r * Math.sqrt(ff)));
+        var fn  = 1 / (rhs * rhs);
+        if (Math.abs(fn - ff) < 1e-9) break;
+        ff = fn;
+      }
+    }
+    return { x: r, y: parseFloat(ff.toFixed(7)) };
+  });
+  mChart.data.datasets[0].data = moodyPts;
+  mChart.data.datasets[1].data = [{ x: Re, y: parseFloat(res.f.toFixed(7)) }];
+  mChart.update('none');
+
+  // ── Head loss bar chart (ft) ──────────────────────────────────────────────
+  lChart.data.datasets[0].data = [
+    parseFloat(hf_maj_ft.toFixed(3)),
+    parseFloat(hf_min_ft.toFixed(3)),
+    parseFloat(Z_ft.toFixed(3))
+  ];
+  lChart.update('none');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SLIDER WIRING HELPER
+// ══════════════════════════════════════════════════════════════════════════════
+function wire(id, outId, fmt) {
+  var el  = document.getElementById(id);
+  var out = document.getElementById(outId);
+  el.addEventListener('input', function() {
+    out.textContent = fmt(this.value);
+    update();
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  INITIALISE
+// ══════════════════════════════════════════════════════════════════════════════
+buildCharts();
+
+wire('s_diam',  'o_diam',  function(v) { return parseFloat(v).toFixed(2) + ' in'; });
+wire('s_rough', 'o_rough', function(v) { return parseFloat(v).toFixed(5) + ' in'; });
+wire('s_elb',   'o_elb',   function(v) { return v; });
+wire('s_val',   'o_val',   function(v) { return v; });
+wire('s_len',   'o_len',   function(v) { return v + ' ft'; });
+wire('s_rise',  'o_rise',  function(v) { return parseFloat(v).toFixed(2) + ' ft'; });
+wire('s_temp',  'o_temp',  function(v) { return parseFloat(v).toFixed(0) + ' °F'; });
+wire('s_flow',  'o_flow',  function(v) { return parseFloat(v).toFixed(1) + ' GPM'; });
+wire('s_eta',   'o_eta',   function(v) { return v + '%'; });
+// ρ and μ sliders only trigger update in custom mode; preset mode drives them automatically
+wire('s_rho',   'o_rho',   function(v) { return parseFloat(v).toFixed(1); });
+wire('s_mu',    'o_mu',    function(v) { return parseFloat(v).toFixed(2) + ' cP'; });
+
+document.getElementById('s_fluid').addEventListener('change', function() { update(); });
+
+update();
+</script>
+</body>
+</html>
